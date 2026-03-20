@@ -10,9 +10,9 @@ Follow the steps below to get everything up and running on your VPS of choice.
 
 *These are the services we will be creating in Dokploy.*
 
-## VPS
+## VPSgit
 
-* Create a VPS with at least 4 GB of RAM and a [supported Linux distro installed](https://docs.dokploy.com/docs/core/installation).
+* Create a VPS with at least 4 GB of ram and a [supported Linux distro installed](https://docs.dokploy.com/docs/core/installation).
 
 ## Dokploy
 
