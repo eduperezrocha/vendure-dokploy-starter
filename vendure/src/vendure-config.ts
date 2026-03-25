@@ -5,7 +5,7 @@ import {
     dummyPaymentHandler,
     VendureConfig
 } from '@vendure/core';
-import { DashboardPlugin } from '@vendure/dashboard/plugin';
+import { AdminUiPlugin } from '@vendure/admin-ui-plugin';
 import { defaultEmailHandlers, EmailPlugin, FileBasedTemplateLoader } from '@vendure/email-plugin';
 import { GraphiqlPlugin } from '@vendure/graphiql-plugin';
 import { BullMQJobQueuePlugin } from '@vendure/job-queue-plugin/package/bullmq';
@@ -94,9 +94,13 @@ export const config: VendureConfig = {
                 changeEmailAddressUrl: 'http://localhost:8080/verify-email-address-change'
             },
         }),
-        DashboardPlugin.init({
+        AdminUiPlugin.init({
             route: 'dashboard',
-            appDir: path.join(__dirname, '../dist/dashboard'),
+            port: 3002,
+            adminUiConfig: {
+                apiHost: 'https://vendure.dhskateshop.com',
+                apiPort: 443,
+            },
         }),
     ],
 };
