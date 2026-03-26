@@ -20,6 +20,13 @@ export const config: VendureConfig = {
         port: serverPort,
         adminApiPath: 'admin-api',
         shopApiPath: 'shop-api',
+        cors: {
+        origin: [
+            'https://dhskateshop.com',
+            'http://localhost:3001',
+        ],
+        credentials: true,
+        },
         trustProxy: IS_LOCAL ? false : 1,
         // The following options are useful in development mode,
         // but are best turned off for production for security
@@ -28,7 +35,7 @@ export const config: VendureConfig = {
             adminApiDebug: true,
             shopApiDebug: true,
         } : {}),
-    },
+    },  
     authOptions: {
         tokenMethod: ['bearer', 'cookie'],
         superadminCredentials: {
