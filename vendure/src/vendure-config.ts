@@ -20,10 +20,12 @@ export const config: VendureConfig = {
         port: serverPort,
         adminApiPath: 'admin-api',
         shopApiPath: 'shop-api',
+        
         cors: {
         origin: [
             'https://dhskateshop.com',
             'http://localhost:3001',
+            'https://www.dhskateshop.com'
         ],
         credentials: true,
         },
@@ -44,6 +46,9 @@ export const config: VendureConfig = {
         },
         cookieOptions: {
           secret: process.env.COOKIE_SECRET,
+          domain: '.dhskateshop.com',
+          sameSite: 'none',
+          secure: true,
         },
     },
     dbConnectionOptions: {
