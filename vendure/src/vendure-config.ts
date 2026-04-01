@@ -11,6 +11,7 @@ import { GraphiqlPlugin } from '@vendure/graphiql-plugin';
 import { BullMQJobQueuePlugin } from '@vendure/job-queue-plugin/package/bullmq';
 import 'dotenv/config';
 import path from 'path';
+import { mercadoPagoHandler } from './plugins/mercadopago-handler';
 
 const IS_LOCAL = process.env.APP_ENV === 'local';
 const serverPort = +process.env.PORT || 3000;
@@ -66,7 +67,7 @@ export const config: VendureConfig = {
         password: process.env.DB_PASSWORD,
     },
     paymentOptions: {
-        paymentMethodHandlers: [dummyPaymentHandler],
+        paymentMethodHandlers: [dummyPaymentHandler, mercadoPagoHandler],
     },
     // When adding or altering custom field definitions, the database will
     // need to be updated. See the "Migrations" section in README.md.

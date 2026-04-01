@@ -21,6 +21,7 @@
     "@vendure/job-queue-plugin": "3.5.2",
     "bullmq": "^5.66.1",
     "dotenv": "17.2.3",
+    "mercadopago": "^2.12.0",
     "pg": "8.16.3",
     "typescript": "5.8.2"
   },
