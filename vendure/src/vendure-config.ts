@@ -3,7 +3,8 @@ import {
     DefaultSchedulerPlugin,
     DefaultSearchPlugin,
     dummyPaymentHandler,
-    VendureConfig
+    VendureConfig,
+    defaultShippingCalculator,
 } from '@vendure/core';
 import { AdminUiPlugin } from '@vendure/admin-ui-plugin';
 import { defaultEmailHandlers, EmailPlugin, FileBasedTemplateLoader } from '@vendure/email-plugin';
@@ -12,6 +13,7 @@ import { BullMQJobQueuePlugin } from '@vendure/job-queue-plugin/package/bullmq';
 import 'dotenv/config';
 import path from 'path';
 import { mercadoPagoHandler } from './plugins/mercadopago-handler';
+import { fedexShippingCalculator } from './plugins/fedex-shipping-calculator';
 
 const IS_LOCAL = process.env.APP_ENV === 'local';
 const serverPort = +process.env.PORT || 3000;
@@ -68,6 +70,9 @@ export const config: VendureConfig = {
     },
     paymentOptions: {
         paymentMethodHandlers: [dummyPaymentHandler, mercadoPagoHandler],
+    },
+    shippingOptions: {
+        shippingCalculators: [defaultShippingCalculator, fedexShippingCalculator],
     },
     // When adding or altering custom field definitions, the database will
     // need to be updated. See the "Migrations" section in README.md.

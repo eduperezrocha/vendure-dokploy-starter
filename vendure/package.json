@@ -19,6 +19,7 @@
     "@vendure/email-plugin": "3.5.2",
     "@vendure/graphiql-plugin": "3.5.2",
     "@vendure/job-queue-plugin": "3.5.2",
+    "axios": "^1.14.0",
     "bullmq": "^5.66.1",
     "dotenv": "17.2.3",
     "mercadopago": "^2.12.0",
