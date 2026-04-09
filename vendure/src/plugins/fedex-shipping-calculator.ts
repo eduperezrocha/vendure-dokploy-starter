@@ -100,7 +100,7 @@ export const fedexShippingCalculator = new ShippingCalculator({
     // Calculate total weight (default 500g per item if not set)
     let totalWeightKg = 0;
     for (const line of order.lines) {
-      const itemWeightGrams = (line.productVariant as any)?.customFields?.weight || 500;
+      const itemWeightGrams = (line.productVariant as any)?.customFields?.weight || 1500;
       totalWeightKg += (itemWeightGrams / 1000) * line.quantity;
     }
     totalWeightKg = Math.max(totalWeightKg, 0.5);
@@ -141,7 +141,7 @@ export const fedexShippingCalculator = new ShippingCalculator({
               dimensions: {
                 length: 30,
                 width: 20,
-                height: 15,
+                height: 12,
                 units: 'CM',
               },
             },
