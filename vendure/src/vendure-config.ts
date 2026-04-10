@@ -14,6 +14,7 @@ import 'dotenv/config';
 import path from 'path';
 import { mercadoPagoHandler } from './plugins/mercadopago-handler';
 import { fedexShippingCalculator } from './plugins/fedex-shipping-calculator';
+import { skydropxShippingCalculator } from './plugins/skydropx-shipping-calculator';
 
 const IS_LOCAL = process.env.APP_ENV === 'local';
 const serverPort = +process.env.PORT || 3000;
@@ -72,7 +73,7 @@ export const config: VendureConfig = {
         paymentMethodHandlers: [dummyPaymentHandler, mercadoPagoHandler],
     },
     shippingOptions: {
-        shippingCalculators: [defaultShippingCalculator, fedexShippingCalculator],
+        shippingCalculators: [defaultShippingCalculator, fedexShippingCalculator, skydropxShippingCalculator],
     },
     // When adding or altering custom field definitions, the database will
     // need to be updated. See the "Migrations" section in README.md.
