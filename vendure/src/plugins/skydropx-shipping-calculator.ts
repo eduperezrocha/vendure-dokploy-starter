@@ -14,7 +14,7 @@ async function getToken(clientId: string, clientSecret: string): Promise<string>
   }
 
   const res = await axios.post(
-    'https://api.skydropx.com/api/v1/oauth/token',
+    'https://app.skydropx.com/api/v1/oauth/token',
     new URLSearchParams({
       grant_type: 'client_credentials',
       client_id: clientId,
@@ -96,7 +96,7 @@ export const skydropxShippingCalculator = new ShippingCalculator({
 
       // 2. Create quotation
       const createRes = await axios.post(
-        'https://api.skydropx.com/api/v1/quotations',
+        'https://app.skydropx.com/api/v1/quotations',
         {
           address_from: {
             country_code: 'MX',
@@ -139,7 +139,7 @@ export const skydropxShippingCalculator = new ShippingCalculator({
         attempts++;
 
         const getRes = await axios.get(
-          `https://api.skydropx.com/api/v1/quotations/${quotationId}`,
+          `https://app.skydropx.com/api/v1/quotations/${quotationId}`,
           {
             headers: {
               'Authorization': `Bearer ${token}`,
