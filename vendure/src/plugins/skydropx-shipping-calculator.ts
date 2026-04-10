@@ -24,9 +24,9 @@ async function getToken(clientId: string, clientSecret: string): Promise<string>
   );
 
   skydropxToken = res.data.access_token;
-  // Token valid for 2 hours, refresh 5 min early
   const expiresIn = res.data.expires_in || 7200;
   tokenExpiry = now + (expiresIn - 300) * 1000;
+  Logger.info(`Got Skydropx token: ${skydropxToken!.slice(0, 10)}...`, loggerCtx);
   return skydropxToken!;
 }
 
@@ -50,11 +50,26 @@ export const skydropxShippingCalculator = new ShippingCalculator({
       defaultValue: '20000',
       label: [{ languageCode: LanguageCode.en, value: 'Origin Postal Code' }],
     },
+    originState: {
+      type: 'string',
+      defaultValue: 'Aguascalientes',
+      label: [{ languageCode: LanguageCode.en, value: 'Origin State' }],
+    },
+    originCity: {
+      type: 'string',
+      defaultValue: 'Aguascalientes',
+      label: [{ languageCode: LanguageCode.en, value: 'Origin City' }],
+    },
+    originNeighborhood: {
+      type: 'string',
+      defaultValue: 'Centro',
+      label: [{ languageCode: LanguageCode.en, value: 'Origin Neighborhood (Colonia)' }],
+    },
     preferredCarrier: {
       type: 'string',
       defaultValue: '',
       label: [{ languageCode: LanguageCode.en, value: 'Preferred Carrier (optional)' }],
-      description: [{ languageCode: LanguageCode.en, value: 'e.g. Fedex, DHL, Estafeta, UPS — leave empty for cheapest across all' }],
+      description: [{ languageCode: LanguageCode.en, value: 'e.g. fedex, dhl, estafeta, ups — leave empty for cheapest' }],
     },
     fallbackRate: {
       type: 'int',
@@ -82,7 +97,7 @@ export const skydropxShippingCalculator = new ShippingCalculator({
       };
     }
 
-    // Calculate total weight (default 1.5kg per item if not set)
+    // Calculate total weight (default 1.5kg per item)
     let totalWeightKg = 0;
     for (const line of order.lines) {
       const itemWeightGrams = (line.productVariant as any)?.customFields?.weight || 1500;
@@ -94,19 +109,24 @@ export const skydropxShippingCalculator = new ShippingCalculator({
       // 1. Get OAuth token
       const token = await getToken(args.clientId, args.clientSecret);
 
-      // 2. Create quotation
-      const createRes = await axios.post(
-        'https://app.skydropx.com/api/v1/quotations',
-        {
+      // 2. Create quotation (V2 format)
+      const requestBody: any = {
+        quotation: {
           address_from: {
             country_code: 'MX',
             postal_code: args.originPostalCode,
+            area_level1: args.originState,
+            area_level2: args.originCity,
+            area_level3: args.originNeighborhood,
           },
           address_to: {
             country_code: 'MX',
             postal_code: shippingAddress.postalCode,
+            area_level1: shippingAddress.province || '',
+            area_level2: shippingAddress.city || '',
+            area_level3: '',
           },
-          packages: [
+          parcels: [
             {
               weight: Math.round(totalWeightKg * 10) / 10,
               length: 30,
@@ -115,6 +135,18 @@ export const skydropxShippingCalculator = new ShippingCalculator({
             },
           ],
         },
+      };
+
+      // Filter by carrier if specified
+      if (args.preferredCarrier) {
+        requestBody.quotation.requested_carriers = [args.preferredCarrier.toLowerCase()];
+      }
+
+      Logger.info(`Creating Skydropx quotation: ${args.originPostalCode} -> ${shippingAddress.postalCode}`, loggerCtx);
+
+      const createRes = await axios.post(
+        'https://app.skydropx.com/api/v2/quotations',
+        requestBody,
         {
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -123,47 +155,49 @@ export const skydropxShippingCalculator = new ShippingCalculator({
         }
       );
 
-      const quotationId = createRes.data?.data?.id;
+      const quotationData = createRes.data;
+      const quotationId = quotationData?.id;
+      let rates = quotationData?.rates || [];
+      let isCompleted = quotationData?.is_completed || false;
 
-      if (!quotationId) {
-        throw new Error('No quotation ID returned');
-      }
+      Logger.info(`Quotation created: ${quotationId}, completed: ${isCompleted}, rates: ${rates.length}`, loggerCtx);
 
-      // 3. Poll for rates (Skydropx calculates rates async)
-      let rates: any[] = [];
-      let attempts = 0;
-      const maxAttempts = 5;
+      // 3. Poll if not completed yet
+      if (!isCompleted && quotationId) {
+        let attempts = 0;
+        const maxAttempts = 5;
 
-      while (attempts < maxAttempts) {
-        await new Promise((r) => setTimeout(r, 2000)); // wait 2 seconds
-        attempts++;
+        while (attempts < maxAttempts) {
+          await new Promise((r) => setTimeout(r, 2000));
+          attempts++;
 
-        const getRes = await axios.get(
-          `https://app.skydropx.com/api/v1/quotations/${quotationId}`,
-          {
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
+          const getRes = await axios.get(
+            `https://app.skydropx.com/api/v1/quotations/${quotationId}`,
+            {
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+              },
+            }
+          );
+
+          const pollData = getRes.data;
+          isCompleted = pollData?.is_completed || false;
+          rates = pollData?.rates || [];
+
+          Logger.info(`Poll attempt ${attempts}: completed=${isCompleted}, rates=${rates.length}`, loggerCtx);
+
+          if (isCompleted || rates.length > 0) {
+            break;
           }
-        );
-
-        const quotation = getRes.data?.data;
-        const isCompleted = quotation?.attributes?.is_completed;
-
-        // Collect rates from included
-        const included = getRes.data?.included || [];
-        rates = included
-          .filter((item: any) => item.type === 'rates' && item.attributes?.success !== false)
-          .map((item: any) => item.attributes);
-
-        if (isCompleted || rates.length > 0) {
-          break;
         }
       }
 
-      if (rates.length === 0) {
-        Logger.warn('No Skydropx rates returned', loggerCtx);
+      // Filter only successful rates
+      const successRates = rates.filter((r: any) => r.success === true);
+
+      if (successRates.length === 0) {
+        Logger.warn('No successful Skydropx rates', loggerCtx);
         return {
           price: args.fallbackRate,
           priceIncludesTax: false,
@@ -173,26 +207,28 @@ export const skydropxShippingCalculator = new ShippingCalculator({
       }
 
       // Filter by preferred carrier if set
+      let filteredRates = successRates;
       if (args.preferredCarrier) {
-        const filtered = rates.filter(
-          (r: any) => r.provider?.toLowerCase() === args.preferredCarrier.toLowerCase()
+        const carrier = args.preferredCarrier.toLowerCase();
+        const carrierFiltered = successRates.filter(
+          (r: any) => r.provider_name?.toLowerCase() === carrier
         );
-        if (filtered.length > 0) {
-          rates = filtered;
+        if (carrierFiltered.length > 0) {
+          filteredRates = carrierFiltered;
         }
       }
 
       // Find cheapest rate
-      const cheapest = rates.reduce((min: any, r: any) => {
-        const price = parseFloat(r.total_pricing || r.amount_local || '999999');
-        const minPrice = parseFloat(min.total_pricing || min.amount_local || '999999');
+      const cheapest = filteredRates.reduce((min: any, r: any) => {
+        const price = parseFloat(r.total || r.amount || '999999');
+        const minPrice = parseFloat(min.total || min.amount || '999999');
         return price < minPrice ? r : min;
-      }, rates[0]);
+      }, filteredRates[0]);
 
-      const totalPrice = parseFloat(cheapest.total_pricing || cheapest.amount_local || '0');
+      const totalPrice = parseFloat(cheapest.total || cheapest.amount || '0');
       const priceInCents = Math.round(totalPrice * 100);
-      const provider = cheapest.provider || 'Skydropx';
-      const serviceName = cheapest.service_level_name || provider;
+      const provider = cheapest.provider_display_name || cheapest.provider_name || 'Skydropx';
+      const serviceName = cheapest.provider_service_name || provider;
       const days = cheapest.days || 0;
 
       Logger.info(
@@ -211,7 +247,7 @@ export const skydropxShippingCalculator = new ShippingCalculator({
         },
       };
     } catch (err: any) {
-      const errMsg = err.response?.data?.error || err.response?.data?.message || err.message;
+      const errMsg = err.response?.data?.error || err.response?.data?.message || JSON.stringify(err.response?.data?.errors || {}) || err.message;
       Logger.error(`Skydropx API error: ${errMsg}`, loggerCtx);
 
       return {
