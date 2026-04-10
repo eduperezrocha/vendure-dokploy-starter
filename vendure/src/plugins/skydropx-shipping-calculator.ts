@@ -2,32 +2,108 @@ import { LanguageCode, ShippingCalculator, Logger } from '@vendure/core';
 import axios from 'axios';
 
 const loggerCtx = 'SkydropxShippingCalculator';
+const SKYDROPX_BASE_URL = 'https://app.skydropx.com';
+const REQUEST_TIMEOUT_MS = 15000;
+const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
 // Cache the OAuth token
 let skydropxToken: string | null = null;
 let tokenExpiry = 0;
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function firstNonEmpty(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed) {
+        return trimmed;
+      }
+    }
+  }
+  return undefined;
+}
+
+function normalizeCarrier(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function parseMoneyValue(value: unknown, fallback = Number.POSITIVE_INFINITY): number {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : fallback;
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+
+  return fallback;
+}
+
+function formatSkydropxError(err: unknown): string {
+  if (axios.isAxiosError(err)) {
+    const status = err.response?.status;
+    const data = err.response?.data;
+
+    let details = err.message;
+
+    if (typeof data === 'string') {
+      details = data;
+    } else if (data && typeof data === 'object') {
+      try {
+        details = JSON.stringify(data);
+      } catch {
+        details = err.message;
+      }
+    }
+
+    return status ? `[${status}] ${details}` : details;
+  }
+
+  if (err instanceof Error) {
+    return err.message;
+  }
+
+  return String(err);
+}
+
 async function getToken(clientId: string, clientSecret: string): Promise<string> {
   const now = Date.now();
+
   if (skydropxToken && now < tokenExpiry) {
     return skydropxToken;
   }
 
   const res = await axios.post(
-    'https://app.skydropx.com/api/v1/oauth/token',
+    `${SKYDROPX_BASE_URL}/api/v1/oauth/token`,
     new URLSearchParams({
       grant_type: 'client_credentials',
       client_id: clientId,
       client_secret: clientSecret,
     }),
-    { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+    {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      timeout: REQUEST_TIMEOUT_MS,
+    },
   );
 
-  skydropxToken = res.data.access_token;
-  const expiresIn = res.data.expires_in || 7200;
-  tokenExpiry = now + (expiresIn - 300) * 1000;
-  Logger.info(`Got Skydropx token: ${skydropxToken!.slice(0, 10)}...`, loggerCtx);
-  return skydropxToken!;
+  const accessToken = res.data?.access_token;
+  const expiresIn = Number(res.data?.expires_in ?? 7200);
+
+  if (!accessToken || typeof accessToken !== 'string') {
+    throw new Error('Skydropx token response did not include access_token');
+  }
+
+  skydropxToken = accessToken;
+  tokenExpiry = now + Math.max(expiresIn * 1000 - TOKEN_REFRESH_BUFFER_MS, 60_000);
+
+  Logger.info('Skydropx token acquired successfully', loggerCtx);
+  return skydropxToken;
 }
 
 export const skydropxShippingCalculator = new ShippingCalculator({
@@ -36,6 +112,7 @@ export const skydropxShippingCalculator = new ShippingCalculator({
     { languageCode: LanguageCode.en, value: 'Skydropx Live Rates' },
     { languageCode: LanguageCode.es, value: 'Tarifas Skydropx en vivo' },
   ],
+
   args: {
     clientId: {
       type: 'string',
@@ -69,7 +146,12 @@ export const skydropxShippingCalculator = new ShippingCalculator({
       type: 'string',
       defaultValue: '',
       label: [{ languageCode: LanguageCode.en, value: 'Preferred Carrier (optional)' }],
-      description: [{ languageCode: LanguageCode.en, value: 'e.g. fedex, dhl, estafeta, ups — leave empty for cheapest' }],
+      description: [
+        {
+          languageCode: LanguageCode.en,
+          value: 'e.g. fedex, dhl, estafeta, ups — leave empty for cheapest',
+        },
+      ],
     },
     fallbackRate: {
       type: 'int',
@@ -87,31 +169,84 @@ export const skydropxShippingCalculator = new ShippingCalculator({
 
   calculate: async (ctx, order, args) => {
     const shippingAddress = order.shippingAddress;
+    const customFields = (shippingAddress as any)?.customFields ?? {};
 
     if (!shippingAddress?.postalCode) {
       return {
         price: 0,
         priceIncludesTax: false,
         taxRate: args.taxRate,
-        metadata: { error: 'No shipping address provided' },
+        metadata: {
+          error: 'No shipping postal code provided',
+        },
       };
     }
 
-    // Calculate total weight (default 1.5kg per item)
+    // Calculate total weight in kg (default 1.5kg per item)
     let totalWeightKg = 0;
+
     for (const line of order.lines) {
-      const itemWeightGrams = (line.productVariant as any)?.customFields?.weight || 1500;
-      totalWeightKg += (itemWeightGrams / 1000) * line.quantity;
+      const itemWeightGrams = Number((line.productVariant as any)?.customFields?.weight ?? 1500);
+      const safeWeightGrams = Number.isFinite(itemWeightGrams) && itemWeightGrams > 0 ? itemWeightGrams : 1500;
+      totalWeightKg += (safeWeightGrams / 1000) * line.quantity;
     }
-    totalWeightKg = Math.max(totalWeightKg, 0.5);
+
+    totalWeightKg = Math.max(Number(totalWeightKg.toFixed(2)), 0.5);
+
+    const destinationState = firstNonEmpty(
+      shippingAddress.province,
+      customFields.state,
+      customFields.area_level1,
+    );
+
+    const destinationCity = firstNonEmpty(
+      shippingAddress.city,
+      customFields.city,
+      customFields.municipality,
+      customFields.area_level2,
+    );
+
+    const destinationNeighborhood = firstNonEmpty(
+      customFields.neighborhood,
+      customFields.colonia,
+      customFields.suburb,
+      customFields.area_level3,
+      shippingAddress.streetLine2,
+      shippingAddress.streetLine1,
+      destinationCity,
+    );
+
+    if (!destinationState || !destinationCity || !destinationNeighborhood) {
+      const missingFields = [
+        !destinationState ? 'area_level1/state' : null,
+        !destinationCity ? 'area_level2/city' : null,
+        !destinationNeighborhood ? 'area_level3/neighborhood' : null,
+      ]
+        .filter(Boolean)
+        .join(', ');
+
+      Logger.warn(
+        `Incomplete destination address for Skydropx quotation. Missing: ${missingFields}`,
+        loggerCtx,
+      );
+
+      return {
+        price: args.fallbackRate,
+        priceIncludesTax: false,
+        taxRate: args.taxRate,
+        metadata: {
+          error: `Incomplete destination address for Skydropx: ${missingFields}`,
+          service: 'Envío estándar (estimado)',
+        },
+      };
+    }
 
     try {
-      // 1. Get OAuth token
       const token = await getToken(args.clientId, args.clientSecret);
 
-      // 2. Create quotation (V2 format)
-      const requestBody: any = {
+      const requestBody: Record<string, any> = {
         quotation: {
+          order_id: String(order.code ?? order.id ?? ''),
           address_from: {
             country_code: 'MX',
             postal_code: args.originPostalCode,
@@ -122,118 +257,164 @@ export const skydropxShippingCalculator = new ShippingCalculator({
           address_to: {
             country_code: 'MX',
             postal_code: shippingAddress.postalCode,
-            area_level1: shippingAddress.province || '',
-            area_level2: shippingAddress.city || '',
-            area_level3: '',
+            area_level1: destinationState,
+            area_level2: destinationCity,
+            area_level3: destinationNeighborhood,
           },
           parcels: [
             {
-              weight: Math.round(totalWeightKg * 10) / 10,
+              weight: totalWeightKg,
               length: 30,
               width: 20,
               height: 12,
+              package_protected: false,
             },
           ],
         },
       };
 
-      // Filter by carrier if specified
-      if (args.preferredCarrier) {
-        requestBody.quotation.requested_carriers = [args.preferredCarrier.toLowerCase()];
+      const preferredCarrier = typeof args.preferredCarrier === 'string' ? normalizeCarrier(args.preferredCarrier) : '';
+      if (preferredCarrier) {
+        requestBody.quotation.requested_carriers = [preferredCarrier];
       }
 
-      Logger.info(`Creating Skydropx quotation: ${args.originPostalCode} -> ${shippingAddress.postalCode}`, loggerCtx);
+      Logger.info(
+        `Creating Skydropx quotation: ${args.originPostalCode} -> ${shippingAddress.postalCode}`,
+        loggerCtx,
+      );
 
       const createRes = await axios.post(
-        'https://app.skydropx.com/api/v2/quotations',
+        `${SKYDROPX_BASE_URL}/api/v2/quotations`,
         requestBody,
         {
           headers: {
-            'Authorization': `Bearer ${token}`,
+            Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
+            Accept: 'application/json',
           },
-        }
+          timeout: REQUEST_TIMEOUT_MS,
+        },
       );
 
-      const quotationData = createRes.data;
-      const quotationId = quotationData?.id;
-      let rates = quotationData?.rates || [];
-      let isCompleted = quotationData?.is_completed || false;
+      const quotationData = createRes.data ?? {};
+      const quotationId = quotationData?.id as string | undefined;
+      let rates: any[] = Array.isArray(quotationData?.rates) ? quotationData.rates : [];
+      let isCompleted = Boolean(quotationData?.is_completed);
 
-      Logger.info(`Quotation created: ${quotationId}, completed: ${isCompleted}, rates: ${rates.length}`, loggerCtx);
+      Logger.info(
+        `Quotation created: ${quotationId ?? 'N/A'}, completed: ${isCompleted}, rates: ${rates.length}`,
+        loggerCtx,
+      );
 
-      // 3. Poll if not completed yet
+      // Poll only if needed. If polling fails, keep the original rates instead of failing the whole quote.
       if (!isCompleted && quotationId) {
         let attempts = 0;
         const maxAttempts = 5;
 
-        while (attempts < maxAttempts) {
-          await new Promise((r) => setTimeout(r, 2000));
-          attempts++;
+        while (attempts < maxAttempts && !isCompleted && rates.length === 0) {
+          attempts += 1;
+          await sleep(2000);
 
-          const getRes = await axios.get(
-            `https://app.skydropx.com/api/v1/quotations/${quotationId}`,
-            {
-              headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
+          try {
+            const getRes = await axios.get(
+              `${SKYDROPX_BASE_URL}/api/v1/quotations/${quotationId}`,
+              {
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  Accept: 'application/json',
+                },
+                timeout: REQUEST_TIMEOUT_MS,
               },
-            }
-          );
+            );
 
-          const pollData = getRes.data;
-          isCompleted = pollData?.is_completed || false;
-          rates = pollData?.rates || [];
+            const pollData = getRes.data ?? {};
+            isCompleted = Boolean(pollData?.is_completed);
+            rates = Array.isArray(pollData?.rates) ? pollData.rates : [];
 
-          Logger.info(`Poll attempt ${attempts}: completed=${isCompleted}, rates=${rates.length}`, loggerCtx);
-
-          if (isCompleted || rates.length > 0) {
+            Logger.info(
+              `Poll attempt ${attempts}: completed=${isCompleted}, rates=${rates.length}`,
+              loggerCtx,
+            );
+          } catch (pollErr) {
+            Logger.warn(`Skydropx quotation poll failed: ${formatSkydropxError(pollErr)}`, loggerCtx);
             break;
           }
         }
       }
 
-      // Filter only successful rates
-      const successRates = rates.filter((r: any) => r.success === true);
+      const successRates = rates.filter((rate: any) => {
+        if (rate?.success !== true) {
+          return false;
+        }
+
+        const numericTotal = parseMoneyValue(rate?.total, Number.NaN);
+        const numericAmount = parseMoneyValue(rate?.amount, Number.NaN);
+
+        return Number.isFinite(numericTotal) || Number.isFinite(numericAmount);
+      });
 
       if (successRates.length === 0) {
-        Logger.warn('No successful Skydropx rates', loggerCtx);
+        const rawStatuses = rates
+          .map((rate: any) => {
+            const provider = rate?.provider_name ?? 'unknown';
+            const status = rate?.status ?? 'unknown';
+            const errors = rate?.error_messages ? JSON.stringify(rate.error_messages) : '';
+            return `${provider}:${status}${errors ? `:${errors}` : ''}`;
+          })
+          .join(' | ');
+
+        Logger.warn(
+          `No successful Skydropx rates${rawStatuses ? ` (${rawStatuses})` : ''}`,
+          loggerCtx,
+        );
+
         return {
           price: args.fallbackRate,
           priceIncludesTax: false,
           taxRate: args.taxRate,
-          metadata: { error: 'No rates available', service: 'Envío estándar' },
+          metadata: {
+            error: 'No Skydropx rates available',
+            service: 'Envío estándar',
+          },
         };
       }
 
-      // Filter by preferred carrier if set
       let filteredRates = successRates;
-      if (args.preferredCarrier) {
-        const carrier = args.preferredCarrier.toLowerCase();
-        const carrierFiltered = successRates.filter(
-          (r: any) => r.provider_name?.toLowerCase() === carrier
-        );
+
+      if (preferredCarrier) {
+        const carrierFiltered = successRates.filter((rate: any) => {
+          const providerName = typeof rate?.provider_name === 'string'
+            ? normalizeCarrier(rate.provider_name)
+            : '';
+
+          const providerDisplayName = typeof rate?.provider_display_name === 'string'
+            ? normalizeCarrier(rate.provider_display_name)
+            : '';
+
+          return providerName === preferredCarrier || providerDisplayName === preferredCarrier;
+        });
+
         if (carrierFiltered.length > 0) {
           filteredRates = carrierFiltered;
         }
       }
 
-      // Find cheapest rate
-      const cheapest = filteredRates.reduce((min: any, r: any) => {
-        const price = parseFloat(r.total || r.amount || '999999');
-        const minPrice = parseFloat(min.total || min.amount || '999999');
-        return price < minPrice ? r : min;
+      const cheapest = filteredRates.reduce((min: any, rate: any) => {
+        const ratePrice = parseMoneyValue(rate?.total, parseMoneyValue(rate?.amount));
+        const minPrice = parseMoneyValue(min?.total, parseMoneyValue(min?.amount));
+
+        return ratePrice < minPrice ? rate : min;
       }, filteredRates[0]);
 
-      const totalPrice = parseFloat(cheapest.total || cheapest.amount || '0');
+      const totalPrice = parseMoneyValue(cheapest?.total, parseMoneyValue(cheapest?.amount, 0));
       const priceInCents = Math.round(totalPrice * 100);
-      const provider = cheapest.provider_display_name || cheapest.provider_name || 'Skydropx';
-      const serviceName = cheapest.provider_service_name || provider;
-      const days = cheapest.days || 0;
+      const provider = cheapest?.provider_display_name || cheapest?.provider_name || 'Skydropx';
+      const serviceName = cheapest?.provider_service_name || provider;
+      const days = Number(cheapest?.days ?? 0);
 
       Logger.info(
-        `Skydropx rate: ${provider} ${serviceName} = $${totalPrice} MXN (${days} days)`,
-        loggerCtx
+        `Skydropx rate selected: ${provider} ${serviceName} = $${totalPrice} MXN (${days} days)`,
+        loggerCtx,
       );
 
       return {
@@ -241,13 +422,16 @@ export const skydropxShippingCalculator = new ShippingCalculator({
         priceIncludesTax: false,
         taxRate: args.taxRate,
         metadata: {
+          quotationId: quotationId ?? '',
           service: `${provider} — ${serviceName}`,
           estimatedDelivery: days > 0 ? `${days} día${days > 1 ? 's' : ''} hábiles` : '',
           totalWeight: `${totalWeightKg} kg`,
+          provider: cheapest?.provider_name ?? '',
+          rateType: cheapest?.rate_type ?? '',
         },
       };
-    } catch (err: any) {
-      const errMsg = err.response?.data?.error || err.response?.data?.message || JSON.stringify(err.response?.data?.errors || {}) || err.message;
+    } catch (err) {
+      const errMsg = formatSkydropxError(err);
       Logger.error(`Skydropx API error: ${errMsg}`, loggerCtx);
 
       return {
