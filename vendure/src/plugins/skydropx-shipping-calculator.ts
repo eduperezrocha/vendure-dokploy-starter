@@ -2,7 +2,7 @@ import { LanguageCode, ShippingCalculator, Logger } from '@vendure/core';
 import axios from 'axios';
 
 const loggerCtx = 'SkydropxShippingCalculator';
-const SKYDROPX_BASE_URL = 'https://app.skydropx.com';
+const SKYDROPX_BASE_URL = 'https://api-pro.skydropx.com';
 const REQUEST_TIMEOUT_MS = 15000;
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
