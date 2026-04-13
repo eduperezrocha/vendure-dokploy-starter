@@ -430,9 +430,10 @@ export const skydropxShippingCalculator = new ShippingCalculator({
           rateType: cheapest?.rate_type ?? '',
         },
       };
-    } catch (err) {
-      const errMsg = formatSkydropxError(err);
-      Logger.error(`Skydropx API error: ${errMsg}`, loggerCtx);
+    } catch (err: any) {
+      const status = err.response?.status || 'unknown';
+      const fullData = JSON.stringify(err.response?.data || {});
+      Logger.error(`Skydropx API error (${status}): ${fullData}`, loggerCtx);
 
       return {
         price: args.fallbackRate,
