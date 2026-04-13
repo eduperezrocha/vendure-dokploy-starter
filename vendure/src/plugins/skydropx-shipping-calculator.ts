@@ -310,8 +310,8 @@ export const skydropxShippingCalculator = new ShippingCalculator({
       if (!isCompleted && quotationId) {
         let attempts = 0;
         const maxAttempts = 5;
-
-        while (attempts < maxAttempts && !isCompleted && rates.length === 0) {
+        const hasSuccessRates = () => rates.some((r: any) => r.success === true);
+        while (attempts < maxAttempts && !isCompleted && !hasSuccessRates()) {
           attempts += 1;
           await sleep(2000);
 
