@@ -99,18 +99,23 @@ export const config: VendureConfig = {
         DefaultSchedulerPlugin.init(),
         DefaultSearchPlugin.init({ bufferUpdates: false, indexStockStatus: true }),
         EmailPlugin.init({
-            devMode: true,
-            outputPath: path.join(__dirname, '../static/email/test-emails'),
-            route: 'mailbox',
             handlers: defaultEmailHandlers,
             templateLoader: new FileBasedTemplateLoader(path.join(__dirname, '../static/email/templates')),
+            transport: {
+                type: 'smtp',
+                host: 'smtp.gmail.com',
+                port: 465,
+                secure: true,
+                auth: {
+                    user: process.env.SMTP_USER,
+                    pass: process.env.SMTP_PASS,
+                },
+            },
             globalTemplateVars: {
-                // The following variables will change depending on your storefront implehmentation.
-                // Here we are assuming a storefront running at http://localhost:8080.
-                fromAddress: '"example" <noreply@example.com>',
-                verifyEmailAddressUrl: 'http://localhost:8080/verify',
-                passwordResetUrl: 'http://localhost:8080/password-reset',
-                changeEmailAddressUrl: 'http://localhost:8080/verify-email-address-change'
+                fromAddress: `"DH Skate Shop" <${process.env.SMTP_USER}>`,
+                verifyEmailAddressUrl: 'https://dhskateshop.com/verify',
+                passwordResetUrl: 'https://dhskateshop.com/password-reset',
+                changeEmailAddressUrl: 'https://dhskateshop.com/verify-email-address-change',
             },
         }),
         AdminUiPlugin.init({
