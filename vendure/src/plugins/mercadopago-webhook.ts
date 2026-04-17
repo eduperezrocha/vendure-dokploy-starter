@@ -95,7 +95,7 @@ export class MercadoPagoWebhookController {
             // Transition order using OrderService (this fires events → triggers emails)
             const transitionResult = await this.orderService.transitionToState(ctx, order.id, 'PaymentSettled');
 
-            if (typeof transitionResult === 'string' || transitionResult?.state === 'PaymentSettled') {
+            if (transitionResult && 'state' in transitionResult && transitionResult.state === 'PaymentSettled') {
               Logger.info(`Order ${externalReference} transitioned to PaymentSettled (email will send)`, loggerCtx);
             } else {
               // Fallback: try raw SQL if OrderService fails
