@@ -15,6 +15,7 @@ import path from 'path';
 import { mercadoPagoHandler } from './plugins/mercadopago-handler';
 import { fedexShippingCalculator } from './plugins/fedex-shipping-calculator';
 import { skydropxShippingCalculator } from './plugins/skydropx-shipping-calculator';
+import { MercadoPagoWebhookPlugin } from './plugins/mercadopago-webhook';
 
 const IS_LOCAL = process.env.APP_ENV === 'local';
 const serverPort = +process.env.PORT || 3000;
@@ -126,5 +127,6 @@ export const config: VendureConfig = {
                 apiPort: 443,
             },
         }),
+        MercadoPagoWebhookPlugin,
     ],
 };
