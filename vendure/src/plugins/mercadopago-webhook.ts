@@ -1,5 +1,5 @@
 import { PluginCommonModule, VendurePlugin, Logger } from '@vendure/core';
-import { TransactionalConnection } from '@vendure/core';
+import { TransactionalConnection, OrderService, RequestContext, PaymentService } from '@vendure/core';
 import { Controller, Post, Req, Res } from '@nestjs/common';
 import { Request, Response } from 'express';
 import axios from 'axios';
@@ -10,6 +10,7 @@ const loggerCtx = 'MercadoPagoWebhook';
 export class MercadoPagoWebhookController {
   constructor(
     private connection: TransactionalConnection,
+    private orderService: OrderService,
   ) {}
 
   @Post()
@@ -72,21 +73,40 @@ export class MercadoPagoWebhookController {
           const order = orders[0];
 
           if (order.state === 'PaymentAuthorized') {
-            // Settle the payment
+            // Create a RequestContext for the default channel
+            const channels = await this.connection.rawConnection
+              .query(`SELECT "id" FROM "channel" WHERE "defaultLanguageCode" IS NOT NULL LIMIT 1`);
+            const channelId = channels[0]?.id;
+
+            const ctx = await RequestContext.deserialize({
+              _channel: { id: channelId },
+              _languageCode: 'en',
+              _isAuthorized: true,
+              _authorizedAsOwnerOnly: false,
+            } as any);
+
+            // Settle the payment using raw SQL (PaymentService.settlePayment requires internal IDs)
             await this.connection.rawConnection
               .query(
                 `UPDATE "payment" SET "state" = 'Settled', "transactionId" = $1 WHERE "orderId" = $2 AND "method" = 'mercado-pago' AND "state" = 'Authorized'`,
                 [String(paymentId), order.id]
               );
 
-            // Transition order to PaymentSettled
-            await this.connection.rawConnection
-              .query(
-                `UPDATE "order" SET "state" = 'PaymentSettled' WHERE "id" = $1 AND "state" = 'PaymentAuthorized'`,
-                [order.id]
-              );
+            // Transition order using OrderService (this fires events → triggers emails)
+            const transitionResult = await this.orderService.transitionToState(ctx, order.id, 'PaymentSettled');
 
-            Logger.info(`Order ${externalReference} settled and transitioned to PaymentSettled`, loggerCtx);
+            if (typeof transitionResult === 'string' || transitionResult?.state === 'PaymentSettled') {
+              Logger.info(`Order ${externalReference} transitioned to PaymentSettled (email will send)`, loggerCtx);
+            } else {
+              // Fallback: try raw SQL if OrderService fails
+              Logger.warn(`OrderService transition failed, using fallback`, loggerCtx);
+              await this.connection.rawConnection
+                .query(
+                  `UPDATE "order" SET "state" = 'PaymentSettled' WHERE "id" = $1 AND "state" = 'PaymentAuthorized'`,
+                  [order.id]
+                );
+              Logger.info(`Order ${externalReference} settled via fallback (email may not send)`, loggerCtx);
+            }
           } else {
             Logger.info(`Order ${externalReference} already in state: ${order.state}`, loggerCtx);
           }
