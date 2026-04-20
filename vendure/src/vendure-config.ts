@@ -25,7 +25,19 @@ export const config: VendureConfig = {
         port: serverPort,
         adminApiPath: 'admin-api',
         shopApiPath: 'shop-api',
-        
+        middleware: [
+        {
+            handler: (req: any, res: any, next: any) => {
+                // Skip CSRF for webhook
+                if (req.path === '/mercadopago-webhook') {
+                    (req as any).csrfToken = () => '';
+                }
+                next();
+            },
+            route: '/',
+            beforeListen: true,
+        },
+        ],
         cors: {
         origin: [
             'https://dhskateshop.com',

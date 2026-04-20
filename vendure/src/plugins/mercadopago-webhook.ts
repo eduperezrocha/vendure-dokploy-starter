@@ -33,7 +33,10 @@ export class MercadoPagoWebhookPlugin implements NestModule {
             await this.handleWebhook(req, res);
           } catch (err: any) {
             Logger.error(`Webhook error: ${err?.message ?? err}`, loggerCtx);
-            res.status(200).send('OK');
+
+            if (!res.headersSent) {
+              res.status(200).send('OK');
+            }
           }
         },
       )
@@ -42,7 +45,10 @@ export class MercadoPagoWebhookPlugin implements NestModule {
 
   private async handleWebhook(req: Request, res: Response) {
     const { type, data } = req.body ?? {};
+
     Logger.info(`Webhook received: ${JSON.stringify(req.body)}`, loggerCtx);
+    Logger.info(`x-signature: ${req.headers['x-signature']}`, loggerCtx);
+    Logger.info(`x-request-id: ${req.headers['x-request-id']}`, loggerCtx);
 
     if (type !== 'payment' || !data?.id) {
       return res.status(200).send('OK');
@@ -50,95 +56,126 @@ export class MercadoPagoWebhookPlugin implements NestModule {
 
     const paymentId = String(data.id);
 
-    // Fetch MP access token from your configured payment method
-    const paymentMethods = await this.connection.rawConnection.query(
-      `SELECT "handler" FROM "payment_method" WHERE "handler"::text LIKE '%mercado-pago%'`
-    );
+    // Respond to Mercado Pago immediately
+    res.status(200).send('OK');
 
-    let accessToken = '';
-    for (const pm of paymentMethods) {
-      try {
-        const handler = typeof pm.handler === 'string' ? JSON.parse(pm.handler) : pm.handler;
-        if (handler?.code === 'mercado-pago') {
-          const tokenArg = handler.args?.find((a: any) => a.name === 'accessToken');
-          if (tokenArg?.value) {
-            accessToken = tokenArg.value;
-            break;
+    try {
+      // Fetch MP access token from configured payment method
+      const paymentMethods = await this.connection.rawConnection.query(
+        `SELECT "handler" FROM "payment_method" WHERE "handler"::text LIKE '%mercado-pago%'`
+      );
+
+      let accessToken = '';
+      for (const pm of paymentMethods) {
+        try {
+          const handler =
+            typeof pm.handler === 'string' ? JSON.parse(pm.handler) : pm.handler;
+
+          if (handler?.code === 'mercado-pago') {
+            const tokenArg = handler.args?.find((a: any) => a.name === 'accessToken');
+            if (tokenArg?.value) {
+              accessToken = tokenArg.value;
+              break;
+            }
           }
-        }
-      } catch {}
+        } catch {}
+      }
+
+      if (!accessToken) {
+        Logger.error('Mercado Pago access token not found', loggerCtx);
+        return;
+      }
+
+      let mpPayment: any;
+
+      try {
+        const mpResponse = await axios.get(
+          `https://api.mercadopago.com/v1/payments/${paymentId}`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+            },
+          },
+        );
+
+        mpPayment = mpResponse.data;
+      } catch (err: any) {
+        Logger.warn(
+          `Could not fetch Mercado Pago payment ${paymentId}. Probably simulator/fake id. Error: ${err?.message}`,
+          loggerCtx,
+        );
+        return;
+      }
+
+      const status = mpPayment.status;
+      const externalReference = mpPayment.external_reference;
+
+      Logger.info(
+        `Mercado Pago payment ${paymentId}: status=${status}, external_reference=${externalReference}`,
+        loggerCtx,
+      );
+
+      if (status !== 'approved' || !externalReference) {
+        Logger.info(
+          `Ignoring payment ${paymentId} because status is not approved or external_reference is missing`,
+          loggerCtx,
+        );
+        return;
+      }
+
+      const orderRepo = this.connection.getRepository('Order');
+      const paymentRepo = this.connection.getRepository('Payment');
+
+      const order = await orderRepo.findOne({
+        where: { code: externalReference },
+        relations: ['payments', 'customer', 'channels'],
+      });
+
+      if (!order) {
+        Logger.warn(`Order not found for code ${externalReference}`, loggerCtx);
+        return;
+      }
+
+      Logger.info(
+        `Order found: code=${order.code}, state=${order.state}, customer=${order.customer?.emailAddress ?? 'no-email'}`,
+        loggerCtx,
+      );
+
+      const vendurePayment = order.payments?.find(
+        (p: any) =>
+          p.method === 'mercado-pago' &&
+          (p.state === 'Authorized' || p.state === 'Created'),
+      );
+
+      if (!vendurePayment) {
+        Logger.warn(
+          `No unsettled Mercado Pago payment found for order ${externalReference}`,
+          loggerCtx,
+        );
+        return;
+      }
+
+      if (!vendurePayment.transactionId) {
+        vendurePayment.transactionId = paymentId;
+        await paymentRepo.save(vendurePayment);
+      }
+
+      const ctx = await this.requestContextService.create({
+        apiType: 'admin',
+        channelOrToken: order.channels?.[0],
+      });
+
+      const result = await this.orderService.settlePayment(ctx, vendurePayment.id);
+
+      Logger.info(
+        `settlePayment result for order ${externalReference}: ${JSON.stringify(result)}`,
+        loggerCtx,
+      );
+    } catch (err: any) {
+      Logger.error(
+        `Post-ack webhook processing failed for payment ${paymentId}: ${err?.message ?? err}`,
+        loggerCtx,
+      );
     }
-
-    if (!accessToken) {
-      Logger.error('Mercado Pago access token not found', loggerCtx);
-      return res.status(200).send('OK');
-    }
-
-    // Verify with Mercado Pago
-    const mpResponse = await axios.get(
-      `https://api.mercadopago.com/v1/payments/${paymentId}`,
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-      },
-    );
-
-    const mpPayment = mpResponse.data;
-    const status = mpPayment.status;
-    const externalReference = mpPayment.external_reference;
-
-    Logger.info(
-      `Mercado Pago payment ${paymentId}: status=${status}, external_reference=${externalReference}`,
-      loggerCtx,
-    );
-
-    if (status !== 'approved' || !externalReference) {
-      return res.status(200).send('OK');
-    }
-
-    // Find the Vendure order by code
-    const orderRepo = this.connection.getRepository('Order');
-    const paymentRepo = this.connection.getRepository('Payment');
-
-    const order = await orderRepo.findOne({
-      where: { code: externalReference },
-      relations: ['payments', 'customer', 'channels'],
-    });
-
-    if (!order) {
-      Logger.warn(`Order not found for code ${externalReference}`, loggerCtx);
-      return res.status(200).send('OK');
-    }
-
-    const vendurePayment = order.payments?.find(
-      (p: any) => p.method === 'mercado-pago' && (p.state === 'Authorized' || p.state === 'Created'),
-    );
-
-    if (!vendurePayment) {
-      Logger.warn(`No unsettled Mercado Pago payment found for order ${externalReference}`, loggerCtx);
-      return res.status(200).send('OK');
-    }
-
-    // Optional: persist provider transaction id in metadata/custom field if needed
-    if (!vendurePayment.transactionId) {
-      vendurePayment.transactionId = paymentId;
-      await paymentRepo.save(vendurePayment);
-    }
-
-    const ctx = await this.requestContextService.create({
-      apiType: 'admin',
-      channelOrToken: order.channels?.[0],
-    });
-
-    const result = await this.orderService.settlePayment(ctx, vendurePayment.id);
-
-    if ((result as any)?.state === 'Settled') {
-      Logger.info(`Payment settled for order ${externalReference}`, loggerCtx);
-    } else {
-      Logger.warn(`Unexpected settlePayment result: ${JSON.stringify(result)}`, loggerCtx);
-    }
-
-    return res.status(200).send('OK');
   }
 }
