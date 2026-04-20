@@ -26,20 +26,16 @@ export class MercadoPagoWebhookPlugin implements NestModule {
 
   configure(consumer: MiddlewareConsumer) {
     consumer
-      .apply(
-        bodyParser.json(),
-        async (req: Request, res: Response, _next: NextFunction) => {
-          try {
-            await this.handleWebhook(req, res);
-          } catch (err: any) {
-            Logger.error(`Webhook error: ${err?.message ?? err}`, loggerCtx);
-
-            if (!res.headersSent) {
-              res.status(200).send('OK');
-            }
+      .apply(async (req: Request, res: Response) => {
+        try {
+          await this.handleWebhook(req, res);
+        } catch (err: any) {
+          Logger.error(`Webhook error: ${err?.message ?? err}`, loggerCtx);
+          if (!res.headersSent) {
+            res.status(200).send('OK');
           }
-        },
-      )
+        }
+      })
       .forRoutes('mercadopago-webhook');
   }
 
