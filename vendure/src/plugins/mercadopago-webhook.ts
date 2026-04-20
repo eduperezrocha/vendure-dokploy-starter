@@ -1,5 +1,11 @@
-import { PluginCommonModule, VendurePlugin, Logger } from '@vendure/core';
-import { TransactionalConnection, OrderService, RequestContext } from '@vendure/core';
+import {
+  PluginCommonModule,
+  RequestContextService,
+  TransactionalConnection,
+  OrderService,
+  VendurePlugin,
+  Logger,
+} from '@vendure/core';
 import { MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { Request, Response, NextFunction } from 'express';
 import axios from 'axios';
@@ -15,36 +21,39 @@ export class MercadoPagoWebhookPlugin implements NestModule {
   constructor(
     private connection: TransactionalConnection,
     private orderService: OrderService,
+    private requestContextService: RequestContextService,
   ) {}
 
   configure(consumer: MiddlewareConsumer) {
     consumer
-      .apply(bodyParser.json(), (req: Request, res: Response, next: NextFunction) => {
-        this.handleWebhook(req, res).catch((err) => {
-          Logger.error(`Webhook error: ${err.message}`, loggerCtx);
-          res.status(200).send('OK');
-        });
-      })
+      .apply(
+        bodyParser.json(),
+        async (req: Request, res: Response, _next: NextFunction) => {
+          try {
+            await this.handleWebhook(req, res);
+          } catch (err: any) {
+            Logger.error(`Webhook error: ${err?.message ?? err}`, loggerCtx);
+            res.status(200).send('OK');
+          }
+        },
+      )
       .forRoutes('mercadopago-webhook');
   }
 
   private async handleWebhook(req: Request, res: Response) {
-    const { type, data } = req.body || {};
-    Logger.info(`Webhook received: type=${type}, data=${JSON.stringify(data)}`, loggerCtx);
+    const { type, data } = req.body ?? {};
+    Logger.info(`Webhook received: ${JSON.stringify(req.body)}`, loggerCtx);
 
-    if (type !== 'payment') {
+    if (type !== 'payment' || !data?.id) {
       return res.status(200).send('OK');
     }
 
-    const paymentId = data?.id;
-    if (!paymentId) {
-      Logger.warn('No payment ID in webhook', loggerCtx);
-      return res.status(200).send('OK');
-    }
+    const paymentId = String(data.id);
 
-    // Find Mercado Pago access token
-    const paymentMethods = await this.connection.rawConnection
-      .query(`SELECT "handler" FROM "payment_method" WHERE "handler"::text LIKE '%mercado-pago%'`);
+    // Fetch MP access token from your configured payment method
+    const paymentMethods = await this.connection.rawConnection.query(
+      `SELECT "handler" FROM "payment_method" WHERE "handler"::text LIKE '%mercado-pago%'`
+    );
 
     let accessToken = '';
     for (const pm of paymentMethods) {
@@ -52,89 +61,82 @@ export class MercadoPagoWebhookPlugin implements NestModule {
         const handler = typeof pm.handler === 'string' ? JSON.parse(pm.handler) : pm.handler;
         if (handler?.code === 'mercado-pago') {
           const tokenArg = handler.args?.find((a: any) => a.name === 'accessToken');
-          if (tokenArg) {
+          if (tokenArg?.value) {
             accessToken = tokenArg.value;
             break;
           }
         }
-      } catch { /* skip */ }
+      } catch {}
     }
 
     if (!accessToken) {
-      Logger.error('Could not find Mercado Pago access token', loggerCtx);
+      Logger.error('Mercado Pago access token not found', loggerCtx);
       return res.status(200).send('OK');
     }
 
-    // Verify payment with Mercado Pago API
+    // Verify with Mercado Pago
     const mpResponse = await axios.get(
       `https://api.mercadopago.com/v1/payments/${paymentId}`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      },
     );
 
     const mpPayment = mpResponse.data;
     const status = mpPayment.status;
     const externalReference = mpPayment.external_reference;
 
-    Logger.info(`Payment ${paymentId}: status=${status}, order=${externalReference}`, loggerCtx);
+    Logger.info(
+      `Mercado Pago payment ${paymentId}: status=${status}, external_reference=${externalReference}`,
+      loggerCtx,
+    );
 
-    if (status === 'approved' && externalReference) {
-      const orders = await this.connection.rawConnection
-        .query(`SELECT "id", "state" FROM "order" WHERE "code" = $1`, [externalReference]);
+    if (status !== 'approved' || !externalReference) {
+      return res.status(200).send('OK');
+    }
 
-      if (orders.length > 0) {
-        const order = orders[0];
+    // Find the Vendure order by code
+    const orderRepo = this.connection.getRepository('Order');
+    const paymentRepo = this.connection.getRepository('Payment');
 
-        if (order.state === 'PaymentAuthorized') {
-          // Settle the payment
-          await this.connection.rawConnection
-            .query(
-              `UPDATE "payment" SET "state" = 'Settled', "transactionId" = $1 WHERE "orderId" = $2 AND "method" = 'mercado-pago' AND "state" = 'Authorized'`,
-              [String(paymentId), order.id]
-            );
+    const order = await orderRepo.findOne({
+      where: { code: externalReference },
+      relations: ['payments', 'customer', 'channels'],
+    });
 
-          // Transition order using OrderService (fires events → triggers emails)
-          try {
-            const channels = await this.connection.rawConnection
-              .query(`SELECT "id" FROM "channel" WHERE "defaultLanguageCode" IS NOT NULL LIMIT 1`);
-            const channelId = channels[0]?.id;
+    if (!order) {
+      Logger.warn(`Order not found for code ${externalReference}`, loggerCtx);
+      return res.status(200).send('OK');
+    }
 
-            const ctx = await RequestContext.deserialize({
-              _channel: { id: channelId },
-              _languageCode: 'en',
-              _isAuthorized: true,
-              _authorizedAsOwnerOnly: false,
-            } as any);
+    const vendurePayment = order.payments?.find(
+      (p: any) => p.method === 'mercado-pago' && (p.state === 'Authorized' || p.state === 'Created'),
+    );
 
-            const transitionResult = await this.orderService.transitionToState(ctx, order.id, 'PaymentSettled');
+    if (!vendurePayment) {
+      Logger.warn(`No unsettled Mercado Pago payment found for order ${externalReference}`, loggerCtx);
+      return res.status(200).send('OK');
+    }
 
-            if (transitionResult && 'state' in transitionResult && transitionResult.state === 'PaymentSettled') {
-              Logger.info(`Order ${externalReference} transitioned to PaymentSettled (email will send)`, loggerCtx);
-            } else {
-              Logger.warn(`OrderService transition result: ${JSON.stringify(transitionResult)}`, loggerCtx);
-              // Fallback
-              await this.connection.rawConnection
-                .query(
-                  `UPDATE "order" SET "state" = 'PaymentSettled' WHERE "id" = $1 AND "state" = 'PaymentAuthorized'`,
-                  [order.id]
-                );
-              Logger.info(`Order ${externalReference} settled via fallback`, loggerCtx);
-            }
-          } catch (err: any) {
-            Logger.error(`Order transition error: ${err.message}`, loggerCtx);
-            // Fallback
-            await this.connection.rawConnection
-              .query(
-                `UPDATE "order" SET "state" = 'PaymentSettled' WHERE "id" = $1 AND "state" = 'PaymentAuthorized'`,
-                [order.id]
-              );
-            Logger.info(`Order ${externalReference} settled via fallback after error`, loggerCtx);
-          }
-        } else {
-          Logger.info(`Order ${externalReference} already in state: ${order.state}`, loggerCtx);
-        }
-      } else {
-        Logger.warn(`Order not found for code: ${externalReference}`, loggerCtx);
-      }
+    // Optional: persist provider transaction id in metadata/custom field if needed
+    if (!vendurePayment.transactionId) {
+      vendurePayment.transactionId = paymentId;
+      await paymentRepo.save(vendurePayment);
+    }
+
+    const ctx = await this.requestContextService.create({
+      apiType: 'admin',
+      channelOrToken: order.channels?.[0],
+    });
+
+    const result = await this.orderService.settlePayment(ctx, vendurePayment.id);
+
+    if ((result as any)?.state === 'Settled') {
+      Logger.info(`Payment settled for order ${externalReference}`, loggerCtx);
+    } else {
+      Logger.warn(`Unexpected settlePayment result: ${JSON.stringify(result)}`, loggerCtx);
     }
 
     return res.status(200).send('OK');
