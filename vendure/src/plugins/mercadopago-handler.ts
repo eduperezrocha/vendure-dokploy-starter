@@ -6,13 +6,9 @@ import {
 } from '@vendure/core';
 import { MercadoPagoConfig, Preference } from 'mercadopago';
 
-let mpClient: MercadoPagoConfig;
 
 function getClient(accessToken: string) {
-  if (!mpClient) {
-    mpClient = new MercadoPagoConfig({ accessToken });
-  }
-  return mpClient;
+  return new MercadoPagoConfig({ accessToken });
 }
 
 export const mercadoPagoHandler = new PaymentMethodHandler({
