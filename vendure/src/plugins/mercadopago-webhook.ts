@@ -7,9 +7,8 @@ import {
   Logger,
 } from '@vendure/core';
 import { MiddlewareConsumer, NestModule } from '@nestjs/common';
-import { Request, Response, NextFunction } from 'express';
+import { Request, Response } from 'express';
 import axios from 'axios';
-import * as bodyParser from 'body-parser';
 
 const loggerCtx = 'MercadoPagoWebhook';
 
@@ -40,45 +39,63 @@ export class MercadoPagoWebhookPlugin implements NestModule {
   }
 
   private async handleWebhook(req: Request, res: Response) {
-    const { type, data } = req.body ?? {};
+    const body = req.body ?? {};
 
-    Logger.info(`Webhook received: ${JSON.stringify(req.body)}`, loggerCtx);
+    Logger.info(`Webhook received: ${JSON.stringify(body)}`, loggerCtx);
     Logger.info(`x-signature: ${req.headers['x-signature']}`, loggerCtx);
     Logger.info(`x-request-id: ${req.headers['x-request-id']}`, loggerCtx);
 
-    if (type !== 'payment' || !data?.id) {
-      return res.status(200).send('OK');
-    }
-
-    const paymentId = String(data.id);
-
-    // Respond to Mercado Pago immediately
+    // Acknowledge immediately
     res.status(200).send('OK');
 
     try {
-      // Fetch MP access token from configured payment method
-      const paymentMethods = await this.connection.rawConnection.query(
-        `SELECT "handler" FROM "payment_method" WHERE "handler"::text LIKE '%mercado-pago%'`
-      );
-
-      let accessToken = '';
-      for (const pm of paymentMethods) {
-        try {
-          const handler =
-            typeof pm.handler === 'string' ? JSON.parse(pm.handler) : pm.handler;
-
-          if (handler?.code === 'mercado-pago') {
-            const tokenArg = handler.args?.find((a: any) => a.name === 'accessToken');
-            if (tokenArg?.value) {
-              accessToken = tokenArg.value;
-              break;
-            }
-          }
-        } catch {}
-      }
+      const accessToken = await this.getAccessToken();
 
       if (!accessToken) {
         Logger.error('Mercado Pago access token not found', loggerCtx);
+        return;
+      }
+
+      Logger.info(`MP token prefix in webhook: ${accessToken.slice(0, 12)}`, loggerCtx);
+
+      let paymentId: string | null = null;
+
+      // Case 1: simulator / payment webhook payload
+      if (body.type === 'payment' && body.data?.id) {
+        paymentId = String(body.data.id);
+      }
+
+      // Case 2: Checkout Pro merchant_order webhook
+      if (!paymentId && body.topic === 'merchant_order' && body.resource) {
+        const merchantOrderUrl = String(body.resource).replace(
+          'https://api.mercadolibre.com',
+          'https://api.mercadopago.com',
+        );
+
+        const merchantOrderResponse = await axios.get(merchantOrderUrl, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        });
+
+        const merchantOrder = merchantOrderResponse.data;
+
+        Logger.info(`Merchant order fetched: ${JSON.stringify(merchantOrder)}`, loggerCtx);
+
+        const approvedPayment = merchantOrder.payments?.find(
+          (p: any) => p.status === 'approved' || p.status === 'authorized',
+        );
+
+        if (!approvedPayment?.id) {
+          Logger.info('merchant_order received but no approved/authorized payment found yet', loggerCtx);
+          return;
+        }
+
+        paymentId = String(approvedPayment.id);
+      }
+
+      if (!paymentId) {
+        Logger.info('Ignoring webhook: unsupported payload shape', loggerCtx);
         return;
       }
 
@@ -97,7 +114,7 @@ export class MercadoPagoWebhookPlugin implements NestModule {
         mpPayment = mpResponse.data;
       } catch (err: any) {
         Logger.warn(
-          `Could not fetch Mercado Pago payment ${paymentId}. Probably simulator/fake id. Error: ${err?.message}`,
+          `Could not fetch Mercado Pago payment ${paymentId}. Error: ${err?.message}`,
           loggerCtx,
         );
         return;
@@ -151,10 +168,8 @@ export class MercadoPagoWebhookPlugin implements NestModule {
         return;
       }
 
-      if (!vendurePayment.transactionId) {
-        vendurePayment.transactionId = paymentId;
-        await paymentRepo.save(vendurePayment);
-      }
+      vendurePayment.transactionId = paymentId;
+      await paymentRepo.save(vendurePayment);
 
       const ctx = await this.requestContextService.create({
         apiType: 'admin',
@@ -168,10 +183,28 @@ export class MercadoPagoWebhookPlugin implements NestModule {
         loggerCtx,
       );
     } catch (err: any) {
-      Logger.error(
-        `Post-ack webhook processing failed for payment ${paymentId}: ${err?.message ?? err}`,
-        loggerCtx,
-      );
+      Logger.error(`Post-ack webhook processing failed: ${err?.message ?? err}`, loggerCtx);
     }
+  }
+
+  private async getAccessToken(): Promise<string> {
+    const paymentMethods = await this.connection.rawConnection.query(
+      `SELECT "handler" FROM "payment_method" WHERE "handler"::text LIKE '%mercado-pago%'`,
+    );
+
+    for (const pm of paymentMethods) {
+      try {
+        const handler = typeof pm.handler === 'string' ? JSON.parse(pm.handler) : pm.handler;
+
+        if (handler?.code === 'mercado-pago') {
+          const tokenArg = handler.args?.find((a: any) => a.name === 'accessToken');
+          if (tokenArg?.value) {
+            return String(tokenArg.value);
+          }
+        }
+      } catch {}
+    }
+
+    return '';
   }
 }

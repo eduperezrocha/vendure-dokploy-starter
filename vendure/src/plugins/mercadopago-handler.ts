@@ -1,11 +1,13 @@
 import {
   CreatePaymentResult,
   LanguageCode,
+  Logger,
   PaymentMethodHandler,
   SettlePaymentResult,
 } from '@vendure/core';
 import { MercadoPagoConfig, Preference } from 'mercadopago';
 
+const loggerCtx = 'MercadoPagoHandler';
 
 function getClient(accessToken: string) {
   return new MercadoPagoConfig({ accessToken });
@@ -22,24 +24,25 @@ export const mercadoPagoHandler = new PaymentMethodHandler({
   },
 
   createPayment: async (ctx, order, amount, args, metadata): Promise<CreatePaymentResult> => {
-    // If we receive a payment_id from Mercado Pago webhook/redirect, settle it
-    if (metadata.paymentId) {
-      return {
-        amount,
-        state: 'Settled' as const,
-        transactionId: metadata.paymentId,
-        metadata: {
-          public: {
-            paymentId: metadata.paymentId,
-            status: metadata.status || 'approved',
-          },
-        },
-      };
-    }
-
-    // Otherwise create a Checkout Pro preference (redirect flow)
     try {
-      const client = getClient(args.accessToken);
+      const accessToken = String(args.accessToken || '').trim();
+
+      if (!accessToken) {
+        return {
+          amount,
+          state: 'Declined',
+          metadata: {
+            errorMessage: 'Mercado Pago access token is missing',
+          },
+        };
+      }
+
+      Logger.info(
+        `createPayment for order ${order.code}, token prefix=${accessToken.slice(0, 12)}`,
+        loggerCtx,
+      );
+
+      const client = getClient(accessToken);
       const preference = new Preference(client);
 
       const result = await preference.create({
@@ -58,13 +61,18 @@ export const mercadoPagoHandler = new PaymentMethodHandler({
             pending: `https://dhskateshop.com/order/pending?code=${order.code}`,
           },
           auto_return: 'approved',
-          notification_url: `https://vendure.dhskateshop.com/mercadopago-webhook`,
+          notification_url: 'https://vendure.dhskateshop.com/mercadopago-webhook',
         },
       });
 
+      Logger.info(
+        `Preference created for order ${order.code}: preferenceId=${result.id}, initPoint=${result.init_point}, sandboxInitPoint=${result.sandbox_init_point}`,
+        loggerCtx,
+      );
+
       return {
         amount,
-        state: 'Authorized' as const,
+        state: 'Authorized',
         transactionId: result.id || '',
         metadata: {
           public: {
@@ -75,10 +83,17 @@ export const mercadoPagoHandler = new PaymentMethodHandler({
         },
       };
     } catch (err: any) {
+      Logger.error(
+        `createPayment failed for order ${order.code}: ${err?.message ?? err}`,
+        loggerCtx,
+      );
+
       return {
         amount,
-        state: 'Declined' as const,
-        metadata: { errorMessage: err.message },
+        state: 'Declined',
+        metadata: {
+          errorMessage: err?.message || 'Mercado Pago preference creation failed',
+        },
       };
     }
   },
