@@ -1,197 +1,141 @@
-{{> header title="Confirmación de Pedido" }}
+<mjml>
+  <mj-head>
+    <mj-attributes>
+      <mj-all font-family="'Space Mono', 'Courier New', monospace" />
+      <mj-body background-color="#f2f2ed" />
+    </mj-attributes>
+    <mj-style>
+      @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
 
-<mj-raw>
-    <style type="text/css">
-    @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
+      * { font-family: 'Space Mono', 'Courier New', monospace !important; }
 
-    * {
-        font-family: 'Space Mono', 'Courier New', monospace !important;
-    }
+      .hero { background-color: #1a1a1a; padding: 32px 0; }
+      .hero-subtitle > div { text-align: center !important; color: #aaa !important; font-size: 10px !important; letter-spacing: 0.12em; padding: 0; }
+      .hero-code > div { text-align: center !important; color: #fff !important; font-size: 20px !important; font-weight: 700; letter-spacing: 0.2em; padding: 8px 0 0 0; }
 
-    .hero {
-        background-color: #1a1a1a;
-        padding: 32px 0;
-    }
-    .hero-title > div {
-        text-align: center !important;
-        color: #f2f2ed !important;
-        font-size: 11px !important;
-        font-weight: 700;
-        letter-spacing: 0.35em;
-        padding: 0;
-    }
-    .hero-subtitle > div {
-        text-align: center !important;
-        color: #aaa !important;
-        font-size: 10px !important;
-        letter-spacing: 0.12em;
-        padding: 0;
-    }
-    .hero-code > div {
-        text-align: center !important;
-        color: #fff !important;
-        font-size: 20px !important;
-        font-weight: 700;
-        letter-spacing: 0.2em;
-        padding: 8px 0 0 0;
-    }
-    ul.address {
-        list-style-type: none;
-        padding: 0;
-        margin: 0;
-    }
-    ul.address li {
-        font-size: 11px;
-        color: #555;
-        letter-spacing: 0.04em;
-        line-height: 1.8;
-    }
-    tr.order-row td {
-        border-bottom: 1px solid #e5e5df;
-        font-size: 11px;
-        letter-spacing: 0.04em;
-        color: #1a1a1a;
-        padding: 12px 6px;
-    }
-    tr.order-row td:last-child {
-        text-align: right;
-    }
-    tr.total-row td {
-        font-weight: 700;
-        font-size: 13px;
-        letter-spacing: 0.08em;
-        border-top: 2px solid #1a1a1a;
-        border-bottom: none;
-    }
-    tr.subtotal-row td {
-        color: #888;
-        font-size: 10px;
-        border-bottom: 1px solid #e5e5df;
-    }
-    .bg-cream {
-        background-color: #f2f2ed;
-    }
-    h3 {
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.2em;
-        text-transform: uppercase;
-        color: #1a1a1a;
-        margin: 0 0 12px 0;
-    }
-    </style>
-</mj-raw>
+      ul.address { list-style-type: none; padding: 0; margin: 0; }
+      ul.address li { font-size: 11px; color: #555; letter-spacing: 0.04em; line-height: 1.8; }
 
-<!-- Logo -->
-<mj-section background-color="#f2f2ed" padding="24px 0 8px 0">
-    <mj-column>
-        <mj-text align="center" font-size="18px" font-weight="700" letter-spacing="0.35em" color="#1a1a1a" font-family="'Space Mono', 'Courier New', monospace">
-            DH SKATE SHOP
+      tr.order-row td { border-bottom: 1px solid #e5e5df; font-size: 11px; letter-spacing: 0.04em; color: #1a1a1a; padding: 12px 6px; }
+      tr.order-row td:last-child { text-align: right; }
+      tr.total-row td { font-weight: 700; font-size: 13px; letter-spacing: 0.08em; border-top: 2px solid #1a1a1a; border-bottom: none; }
+      tr.subtotal-row td { color: #888; font-size: 10px; border-bottom: 1px solid #e5e5df; }
+
+      h3 { font-size: 11px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; color: #1a1a1a; margin: 0 0 12px 0; }
+    </mj-style>
+  </mj-head>
+
+  <mj-body background-color="#f2f2ed">
+
+    <!-- Logo -->
+    <mj-section background-color="#f2f2ed" padding="32px 0 8px 0">
+      <mj-column>
+        <mj-text align="center" font-size="18px" font-weight="700" letter-spacing="0.35em" color="#1a1a1a">
+          DH SKATE SHOP
         </mj-text>
-    </mj-column>
-</mj-section>
+      </mj-column>
+    </mj-section>
 
-<!-- Greeting -->
-<mj-section background-color="#f2f2ed" padding="16px 24px">
-    <mj-column>
-        <mj-text font-size="11px" color="#1a1a1a" letter-spacing="0.04em" line-height="1.8" font-family="'Space Mono', 'Courier New', monospace">
-            Hola {{ order.customer.firstName }},
+    <!-- Greeting -->
+    <mj-section background-color="#f2f2ed" padding="16px 24px">
+      <mj-column>
+        <mj-text font-size="11px" color="#1a1a1a" letter-spacing="0.04em" line-height="1.8">
+          Hola {{ order.customer.firstName }},
         </mj-text>
-        <mj-text font-size="11px" color="#555" letter-spacing="0.04em" line-height="1.8" font-family="'Space Mono', 'Courier New', monospace">
-            Gracias por tu compra. Tu pedido ha sido confirmado.
+        <mj-text font-size="11px" color="#555" letter-spacing="0.04em" line-height="1.8">
+          Gracias por tu compra. Tu pedido ha sido confirmado.
         </mj-text>
-    </mj-column>
-</mj-section>
+      </mj-column>
+    </mj-section>
 
-<!-- Order Code Banner -->
-<mj-section css-class="hero" padding="28px 0">
-    <mj-column>
-        <mj-text css-class="hero-subtitle" font-family="'Space Mono', 'Courier New', monospace">CÓDIGO DE PEDIDO</mj-text>
-        <mj-text css-class="hero-code" font-family="'Space Mono', 'Courier New', monospace">{{ order.code }}</mj-text>
-    </mj-column>
-    <mj-column>
-        <mj-text css-class="hero-subtitle" font-family="'Space Mono', 'Courier New', monospace">FECHA</mj-text>
-        <mj-text css-class="hero-code" font-size="14px" font-family="'Space Mono', 'Courier New', monospace">{{ formatDate order.orderPlacedAt }}</mj-text>
-    </mj-column>
-    <mj-column>
-        <mj-text css-class="hero-subtitle" font-family="'Space Mono', 'Courier New', monospace">TOTAL</mj-text>
-        <mj-text css-class="hero-code" font-family="'Space Mono', 'Courier New', monospace">{{ formatMoney order.totalWithTax order.currencyCode 'es' }}</mj-text>
-    </mj-column>
-</mj-section>
+    <!-- Order Code Banner -->
+    <mj-section css-class="hero" padding="28px 0">
+      <mj-column>
+        <mj-text css-class="hero-subtitle">CÓDIGO DE PEDIDO</mj-text>
+        <mj-text css-class="hero-code">{{ order.code }}</mj-text>
+      </mj-column>
+      <mj-column>
+        <mj-text css-class="hero-subtitle">FECHA</mj-text>
+        <mj-text css-class="hero-code" font-size="14px">{{ formatDate order.orderPlacedAt }}</mj-text>
+      </mj-column>
+      <mj-column>
+        <mj-text css-class="hero-subtitle">TOTAL</mj-text>
+        <mj-text css-class="hero-code">{{ formatMoney order.totalWithTax order.currencyCode 'es' }}</mj-text>
+      </mj-column>
+    </mj-section>
 
-<!-- Order Items -->
-<mj-section background-color="#f2f2ed" padding="24px 24px 0 24px">
-    <mj-column>
-        <mj-text font-family="'Space Mono', 'Courier New', monospace">
-            <h3>RESUMEN DEL PEDIDO</h3>
-        </mj-text>
-        <mj-table cellpadding="6px" font-family="'Space Mono', 'Courier New', monospace">
-            {{#each order.lines }}
-                <tr class="order-row">
-                    <td style="width: 50px;">
-                        <img alt="{{ productVariant.name }}"
-                             style="width: 50px; height: 50px; object-fit: cover; background: #e5e5df;"
-                             src="{{ featuredAsset.preview }}?w=100&h=100" />
-                    </td>
-                    <td>{{ quantity }} x {{ productVariant.name }}</td>
-                    <td>{{ formatMoney discountedLinePriceWithTax ../order.currencyCode 'es' }}</td>
-                </tr>
-            {{/each}}
-            {{#each order.discounts }}
-                <tr class="order-row subtotal-row">
-                    <td colspan="2">{{ description }}</td>
-                    <td>{{ formatMoney amount ../order.currencyCode 'es' }}</td>
-                </tr>
-            {{/each}}
+    <!-- Order Items -->
+    <mj-section background-color="#f2f2ed" padding="24px 24px 0 24px">
+      <mj-column>
+        <mj-text><h3>RESUMEN DEL PEDIDO</h3></mj-text>
+        <mj-table cellpadding="6px">
+          {{#each order.lines }}
+            <tr class="order-row">
+              <td style="width: 50px;">
+                <img alt="{{ productVariant.name }}"
+                     style="width: 50px; height: 50px; object-fit: cover; background: #e5e5df;"
+                     src="{{ featuredAsset.preview }}?w=100&h=100" />
+              </td>
+              <td>{{ quantity }} x {{ productVariant.name }}</td>
+              <td>{{ formatMoney discountedLinePriceWithTax ../order.currencyCode 'es' }}</td>
+            </tr>
+          {{/each}}
+          {{#each order.discounts }}
             <tr class="order-row subtotal-row">
-                <td colspan="2">Subtotal</td>
-                <td>{{ formatMoney order.subTotalWithTax order.currencyCode 'es' }}</td>
+              <td colspan="2">{{ description }}</td>
+              <td>{{ formatMoney amount ../order.currencyCode 'es' }}</td>
             </tr>
-            {{#each shippingLines }}
+          {{/each}}
+          <tr class="order-row subtotal-row">
+            <td colspan="2">Subtotal</td>
+            <td>{{ formatMoney order.subTotalWithTax order.currencyCode 'es' }}</td>
+          </tr>
+          {{#each shippingLines }}
             <tr class="order-row subtotal-row">
-                <td colspan="2">Envío ({{ shippingMethod.name }})</td>
-                <td>{{ formatMoney priceWithTax ../order.currencyCode 'es' }}</td>
+              <td colspan="2">Envío ({{ shippingMethod.name }})</td>
+              <td>{{ formatMoney priceWithTax ../order.currencyCode 'es' }}</td>
             </tr>
-            {{/each}}
-            <tr class="order-row total-row">
-                <td colspan="2">Total</td>
-                <td>{{ formatMoney order.totalWithTax order.currencyCode 'es' }}</td>
-            </tr>
+          {{/each}}
+          <tr class="order-row total-row">
+            <td colspan="2">Total</td>
+            <td>{{ formatMoney order.totalWithTax order.currencyCode 'es' }}</td>
+          </tr>
         </mj-table>
-    </mj-column>
-</mj-section>
+      </mj-column>
+    </mj-section>
 
-<!-- Shipping Address -->
-<mj-section background-color="#f2f2ed" padding="24px">
-    <mj-column>
-        <mj-text font-family="'Space Mono', 'Courier New', monospace">
-            {{#with order.shippingAddress }}
-                <h3>DIRECCIÓN DE ENVÍO</h3>
-                <ul class="address">
-                    <li><strong>{{ fullName }}</strong></li>
-                    {{#if streetLine1}}<li>{{ streetLine1 }}</li>{{/if}}
-                    {{#if streetLine2}}<li>{{ streetLine2 }}</li>{{/if}}
-                    {{#if city}}<li>{{ city }}, {{ province }}</li>{{/if}}
-                    {{#if postalCode}}<li>C.P. {{ postalCode }}</li>{{/if}}
-                    {{#if country}}<li>{{ country }}</li>{{/if}}
-                    {{#if phoneNumber}}<li>Tel: {{ phoneNumber }}</li>{{/if}}
-                </ul>
-            {{/with}}
+    <!-- Shipping Address -->
+    <mj-section background-color="#f2f2ed" padding="24px">
+      <mj-column>
+        <mj-text>
+          {{#with order.shippingAddress }}
+            <h3>DIRECCIÓN DE ENVÍO</h3>
+            <ul class="address">
+              <li><strong>{{ fullName }}</strong></li>
+              {{#if streetLine1}}<li>{{ streetLine1 }}</li>{{/if}}
+              {{#if streetLine2}}<li>{{ streetLine2 }}</li>{{/if}}
+              {{#if city}}<li>{{ city }}, {{ province }}</li>{{/if}}
+              {{#if postalCode}}<li>C.P. {{ postalCode }}</li>{{/if}}
+              {{#if country}}<li>{{ country }}</li>{{/if}}
+              {{#if phoneNumber}}<li>Tel: {{ phoneNumber }}</li>{{/if}}
+            </ul>
+          {{/with}}
         </mj-text>
-    </mj-column>
-</mj-section>
+      </mj-column>
+    </mj-section>
 
-<!-- Footer Note -->
-<mj-section background-color="#f2f2ed" padding="0 24px 8px 24px">
-    <mj-column>
+    <!-- Footer -->
+    <mj-section background-color="#f2f2ed" padding="0 24px 32px 24px">
+      <mj-column>
         <mj-divider border-color="#ddd" border-width="1px" padding="0 0 16px 0" />
-        <mj-text font-size="9px" color="#aaa" letter-spacing="0.1em" align="center" line-height="2" font-family="'Space Mono', 'Courier New', monospace">
-            TODAS LAS VENTAS SON FINALES
+        <mj-text font-size="9px" color="#aaa" letter-spacing="0.1em" align="center" line-height="2">
+          TODAS LAS VENTAS SON FINALES
         </mj-text>
-        <mj-text font-size="9px" color="#aaa" letter-spacing="0.1em" align="center" line-height="2" font-family="'Space Mono', 'Courier New', monospace">
-            © 2026 DH SKATE SHOP — TODOS LOS DERECHOS RESERVADOS
+        <mj-text font-size="9px" color="#aaa" letter-spacing="0.1em" align="center" line-height="2">
+          © 2026 DH SKATE SHOP — TODOS LOS DERECHOS RESERVADOS
         </mj-text>
-    </mj-column>
-</mj-section>
+      </mj-column>
+    </mj-section>
 
-{{> footer }}
+  </mj-body>
+</mjml>
