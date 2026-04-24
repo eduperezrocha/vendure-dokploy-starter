@@ -45,7 +45,7 @@ export class MercadoPagoWebhookPlugin implements NestModule {
     Logger.info(`x-signature: ${req.headers['x-signature']}`, loggerCtx);
     Logger.info(`x-request-id: ${req.headers['x-request-id']}`, loggerCtx);
 
-    // Acknowledge immediately
+    // Always acknowledge Mercado Pago immediately
     res.status(200).send('OK');
 
     try {
@@ -60,17 +60,26 @@ export class MercadoPagoWebhookPlugin implements NestModule {
 
       let paymentId: string | null = null;
 
-      // Case 1: simulator / payment webhook payload
+      // Case 1: Webhook payment format
       if (body.type === 'payment' && body.data?.id) {
         paymentId = String(body.data.id);
       }
 
-      // Case 2: Checkout Pro merchant_order webhook
+      // Case 2: topic/resource payment format
+      if (!paymentId && body.topic === 'payment' && body.resource) {
+        paymentId = String(body.resource).split('/').pop() ?? null;
+      }
+
+      // Case 3: Checkout Pro merchant_order format
       if (!paymentId && body.topic === 'merchant_order' && body.resource) {
-        const merchantOrderUrl = String(body.resource).replace(
-          'https://api.mercadolibre.com',
-          'https://api.mercadopago.com',
-        );
+        const merchantOrderId = String(body.resource).split('/').pop();
+
+        if (!merchantOrderId) {
+          Logger.warn('merchant_order webhook had no merchant order id', loggerCtx);
+          return;
+        }
+
+        const merchantOrderUrl = `https://api.mercadopago.com/merchant_orders/${merchantOrderId}`;
 
         const merchantOrderResponse = await axios.get(merchantOrderUrl, {
           headers: {
@@ -154,6 +163,17 @@ export class MercadoPagoWebhookPlugin implements NestModule {
         loggerCtx,
       );
 
+      Logger.info(
+        `Order channels: ${JSON.stringify(
+          order.channels?.map((c: any) => ({
+            id: c.id,
+            code: c.code,
+            token: c.token,
+          })),
+        )}`,
+        loggerCtx,
+      );
+
       const vendurePayment = order.payments?.find(
         (p: any) =>
           p.method === 'mercado-pago' &&
@@ -171,9 +191,16 @@ export class MercadoPagoWebhookPlugin implements NestModule {
       vendurePayment.transactionId = paymentId;
       await paymentRepo.save(vendurePayment);
 
+      const channelToken = order.channels?.[0]?.token;
+
+      if (!channelToken) {
+        Logger.error(`Order ${externalReference} has no channel token`, loggerCtx);
+        return;
+      }
+
       const ctx = await this.requestContextService.create({
         apiType: 'admin',
-        channelOrToken: order.channels?.[0],
+        channelOrToken: channelToken,
       });
 
       const result = await this.orderService.settlePayment(ctx, vendurePayment.id);

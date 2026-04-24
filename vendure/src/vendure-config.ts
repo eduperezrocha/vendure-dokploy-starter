@@ -12,10 +12,10 @@ import { GraphiqlPlugin } from '@vendure/graphiql-plugin';
 import { BullMQJobQueuePlugin } from '@vendure/job-queue-plugin/package/bullmq';
 import 'dotenv/config';
 import path from 'path';
-import axios from 'axios';
 import { mercadoPagoHandler } from './plugins/mercadopago-handler';
 import { fedexShippingCalculator } from './plugins/fedex-shipping-calculator';
 import { skydropxShippingCalculator } from './plugins/skydropx-shipping-calculator';
+import { MercadoPagoWebhookPlugin } from './plugins/mercadopago-webhook';
 
 const IS_LOCAL = process.env.APP_ENV === 'local';
 const serverPort = +process.env.PORT || 3000;
@@ -26,175 +26,35 @@ export const config: VendureConfig = {
         adminApiPath: 'admin-api',
         shopApiPath: 'shop-api',
         middleware: [
-            {
-                handler: async (req: any, res: any, next: any) => {
-                    if (req.path !== '/mercadopago-webhook') {
-                        return next();
-                    }
-
-                    if (req.method === 'GET') {
-                        return res.status(200).send('OK');
-                    }
-
-                    if (req.method !== 'POST') {
-                        return res.status(200).send('OK');
-                    }
-
-                    // Respond immediately to Mercado Pago (they require fast response)
-                    res.status(200).send('OK');
-
-                    // Process webhook async after responding
-                    try {
-                        const body = req.body || {};
-                        console.log(`[MercadoPagoWebhook] Received:`, JSON.stringify(body));
-
-                        // Determine payment ID from notification format
-                        let paymentId = null;
-
-                        if (body.type === 'payment' && body.data?.id) {
-                            // Webhook format: { type: "payment", data: { id: "123" } }
-                            paymentId = body.data.id;
-                        } else if (body.topic === 'payment' && body.resource) {
-                            // IPN format: { topic: "payment", resource: "https://.../payments/123" }
-                            paymentId = body.resource.split('/').pop();
-                        } else {
-                            // Ignore merchant_order and other notification types
-                            console.log(`[MercadoPagoWebhook] Ignoring: topic=${body.topic || body.type}`);
-                            return;
-                        }
-
-                        if (!paymentId) {
-                            console.log(`[MercadoPagoWebhook] No payment ID found`);
-                            return;
-                        }
-
-                        console.log(`[MercadoPagoWebhook] Processing payment: ${paymentId}`);
-
-                        // Get DB connection
-                        const dataSource = req.app?.get?.('TypeORMConnection') || req.app?.get?.('DataSource');
-                        if (!dataSource) {
-                            console.error('[MercadoPagoWebhook] No DataSource found');
-                            return;
-                        }
-
-                        // Find access token from payment methods
-                        const pms = await dataSource.query(
-                            `SELECT "handler" FROM "payment_method" WHERE "handler"::text LIKE '%mercado-pago%'`
-                        );
-                        let accessToken = '';
-                        for (const pm of pms) {
-                            try {
-                                const h = typeof pm.handler === 'string' ? JSON.parse(pm.handler) : pm.handler;
-                                const t = h?.args?.find((a: any) => a.name === 'accessToken');
-                                if (t) { accessToken = t.value; break; }
-                            } catch {}
-                        }
-
-                        if (!accessToken) {
-                            console.error('[MercadoPagoWebhook] No access token found');
-                            return;
-                        }
-
-                        // Verify payment with Mercado Pago API
-                        const mp = await axios.get(
-                            `https://api.mercadopago.com/v1/payments/${paymentId}`,
-                            { headers: { Authorization: `Bearer ${accessToken}` } }
-                        );
-
-                        const { status, external_reference } = mp.data;
-                        console.log(`[MercadoPagoWebhook] Payment ${paymentId}: status=${status}, order=${external_reference}`);
-
-                        if (status === 'approved' && external_reference) {
-                            const orders = await dataSource.query(
-                                `SELECT "id", "state" FROM "order" WHERE "code" = $1`, [external_reference]
-                            );
-
-                            if (orders.length > 0 && orders[0].state === 'PaymentAuthorized') {
-                                // Settle the payment via raw SQL
-                                await dataSource.query(
-                                    `UPDATE "payment" SET "state" = 'Settled', "transactionId" = $1 WHERE "orderId" = $2 AND "method" = 'mercado-pago' AND "state" = 'Authorized'`,
-                                    [String(paymentId), orders[0].id]
-                                );
-
-                                // Transition order via Admin API to fire events (triggers email)
-                                try {
-                                    const localApi = `http://localhost:${serverPort}/admin-api`;
-
-                                    // Login as superadmin
-                                    const loginRes = await axios.post(
-                                        localApi,
-                                        {
-                                            query: `mutation { login(username: "${process.env.SUPERADMIN_USERNAME}", password: "${process.env.SUPERADMIN_PASSWORD}") { ... on CurrentUser { id } ... on InvalidCredentialsError { message } } }`
-                                        },
-                                        { headers: { 'Content-Type': 'application/json' } }
-                                    );
-
-                                    const setCookies = loginRes.headers['set-cookie'] || [];
-                                    const cookieStr = setCookies.map((c: string) => c.split(';')[0]).join('; ');
-
-                                    // Transition to PaymentSettled via Admin API (fires OrderStateTransitionEvent → email)
-                                    const transitionRes = await axios.post(
-                                        localApi,
-                                        {
-                                            query: `mutation { transitionOrderToState(id: "${orders[0].id}", state: "PaymentSettled") { ... on Order { id state } ... on OrderStateTransitionError { errorCode message transitionError } } }`
-                                        },
-                                        {
-                                            headers: {
-                                                'Content-Type': 'application/json',
-                                                'Cookie': cookieStr,
-                                            }
-                                        }
-                                    );
-
-                                    const transResult = transitionRes.data?.data?.transitionOrderToState;
-                                    if (transResult?.state === 'PaymentSettled') {
-                                        console.log(`[MercadoPagoWebhook] Order ${external_reference} → PaymentSettled via Admin API (email will send)`);
-                                    } else {
-                                        console.log(`[MercadoPagoWebhook] Admin API transition result:`, JSON.stringify(transResult));
-                                        // Fallback: set via raw SQL (email won't send but order is settled)
-                                        await dataSource.query(
-                                            `UPDATE "order" SET "state" = 'PaymentSettled' WHERE "id" = $1 AND "state" = 'PaymentAuthorized'`,
-                                            [orders[0].id]
-                                        );
-                                        console.log(`[MercadoPagoWebhook] Order ${external_reference} → PaymentSettled via fallback SQL`);
-                                    }
-                                } catch (apiErr: any) {
-                                    console.error(`[MercadoPagoWebhook] Admin API error: ${apiErr.message}`);
-                                    // Fallback: raw SQL
-                                    await dataSource.query(
-                                        `UPDATE "order" SET "state" = 'PaymentSettled' WHERE "id" = $1 AND "state" = 'PaymentAuthorized'`,
-                                        [orders[0].id]
-                                    );
-                                    console.log(`[MercadoPagoWebhook] Order ${external_reference} → PaymentSettled via fallback SQL`);
-                                }
-                            } else if (orders.length > 0) {
-                                console.log(`[MercadoPagoWebhook] Order ${external_reference} already in state: ${orders[0].state}`);
-                            } else {
-                                console.log(`[MercadoPagoWebhook] Order not found: ${external_reference}`);
-                            }
-                        }
-                    } catch (err: any) {
-                        console.error(`[MercadoPagoWebhook] Error: ${err.message}`);
-                    }
-                },
-                route: '/',
-                beforeListen: true,
+        {
+            handler: (req: any, res: any, next: any) => {
+                // Skip CSRF for webhook
+                if (req.path === '/mercadopago-webhook') {
+                    (req as any).csrfToken = () => '';
+                }
+                next();
             },
+            route: '/',
+            beforeListen: true,
+        },
         ],
         cors: {
-            origin: [
-                'https://dhskateshop.com',
-                'http://localhost:3001',
-                'https://www.dhskateshop.com'
-            ],
-            credentials: true,
+        origin: [
+            'https://dhskateshop.com',
+            'http://localhost:3001',
+            'https://www.dhskateshop.com'
+        ],
+        credentials: true,
         },
         trustProxy: IS_LOCAL ? false : 1,
+        // The following options are useful in development mode,
+        // but are best turned off for production for security
+        // reasons.
         ...(IS_LOCAL ? {
             adminApiDebug: true,
             shopApiDebug: true,
         } : {}),
-    },
+    },  
     authOptions: {
         tokenMethod: ['bearer', 'cookie'],
         superadminCredentials: {
@@ -202,14 +62,16 @@ export const config: VendureConfig = {
             password: process.env.SUPERADMIN_PASSWORD,
         },
         cookieOptions: {
-            secret: process.env.COOKIE_SECRET,
-            domain: '.dhskateshop.com',
-            sameSite: 'none',
-            secure: true,
+          secret: process.env.COOKIE_SECRET,
+          domain: '.dhskateshop.com',
+          sameSite: 'none',
+          secure: true,
         },
     },
     dbConnectionOptions: {
         type: 'postgres',
+        // See the README.md "Migrations" section for an explanation of
+        // the `synchronize` and `migrations` options.
         synchronize: true,
         migrations: [path.join(__dirname, './migrations/*.+(js|ts)')],
         logging: false,
@@ -226,20 +88,25 @@ export const config: VendureConfig = {
     shippingOptions: {
         shippingCalculators: [defaultShippingCalculator, fedexShippingCalculator, skydropxShippingCalculator],
     },
+    // When adding or altering custom field definitions, the database will
+    // need to be updated. See the "Migrations" section in README.md.
     customFields: {},
     plugins: [
         BullMQJobQueuePlugin.init({
             connection: {
-                port: 6379,
-                host: process.env.REDIS_HOST,
-                password: process.env.REDIS_PASSWORD,
-                maxRetriesPerRequest: null
+              port: 6379,
+              host: process.env.REDIS_HOST,
+              password: process.env.REDIS_PASSWORD,
+              maxRetriesPerRequest: null
             },
-        }),
+          }),
         GraphiqlPlugin.init(),
         AssetServerPlugin.init({
             route: 'assets',
             assetUploadDir: IS_LOCAL ? path.join(__dirname, '../static/assets') : '/usr/src/app/assets',
+            // For local dev, the correct value for assetUrlPrefix should
+            // be guessed correctly, but for production it will usually need
+            // to be set manually to match your production url.
             assetUrlPrefix: `https://${process.env.VENDURE_HOST}/assets/`,
         }),
         DefaultSchedulerPlugin.init(),
@@ -272,5 +139,6 @@ export const config: VendureConfig = {
                 apiPort: 443,
             },
         }),
+        MercadoPagoWebhookPlugin,
     ],
 };
